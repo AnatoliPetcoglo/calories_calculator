@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no"/>
   <title>Calorie & Activity Planner</title>
 
+  <!-- Gamified: coins, hearts, XP, daily quests & spin wheel -->
   <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Icons -->
@@ -41,6 +42,11 @@
       <p class="text-gray-600">Personal results, saved profile, and your activity plan</p>
     </div>
     <div class="flex items-center gap-2">
+      <div class="flex items-center gap-3 mr-2 text-sm">
+        <div class="flex items-center text-yellow-600"><i class="fa-solid fa-coins mr-1"></i><span id="coinsDisplay">0</span></div>
+        <div class="flex items-center text-red-500"><i class="fa-solid fa-heart mr-1"></i><span id="heartsDisplay">0</span></div>
+        <div class="flex items-center text-blue-600"><i class="fa-solid fa-star mr-1"></i><span id="levelDisplay">1</span></div>
+      </div>
       <span id="goalBadge" class="badge hidden"></span>
       <button id="openProfile" class="px-3 py-2 border border-gray-300 rounded-lg hover:bg-white">
         <i class="fa-solid fa-user-gear mr-2"></i>Profile
@@ -118,6 +124,19 @@
       <div class="bg-white rounded-xl shadow p-5">
         <div class="flex items-center mb-2"><i class="fa-solid fa-list-check mr-3 text-purple-600"></i><div class="font-semibold">Today’s plan</div></div>
         <div id="todayPlan" class="text-sm text-gray-600">—</div>
+      </div>
+    </div>
+
+    <!-- Gamification widgets -->
+    <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div class="bg-white rounded-xl shadow p-5">
+        <div class="flex items-center mb-2"><i class="fa-solid fa-arrows-rotate mr-3 text-pink-600"></i><div class="font-semibold">Daily Spin</div></div>
+        <button id="spinBtn" class="px-3 py-2 bg-indigo-600 text-white rounded" onclick="spinWheel()">Spin</button>
+        <div id="spinInfo" class="text-xs text-gray-500 mt-2"></div>
+      </div>
+      <div class="bg-white rounded-xl shadow p-5">
+        <div class="flex items-center mb-2"><i class="fa-solid fa-list-check mr-3 text-green-600"></i><div class="font-semibold">Daily Quests</div></div>
+        <ul id="questsList" class="text-sm text-gray-600 space-y-2"></ul>
       </div>
     </div>
   </div>
@@ -427,6 +446,7 @@
 <script>
   const $ = (s) => document.querySelector(s);
   const LS_PROFILE='cap.profile', LS_SCHEDULE='cap.schedule', LS_LOGS='cap.logs';
+  const LS_GAME='cap.game', LS_QUESTS='cap.dailyQuests';
   const kcalPerKg = 7700;
   const WEEK=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
@@ -456,6 +476,88 @@
   function saveSchedule(s){ localStorage.setItem(LS_SCHEDULE, JSON.stringify(s||{})); }
   function getLogs(){ try{ return JSON.parse(localStorage.getItem(LS_LOGS)||'[]'); }catch(e){ return []; } }
   function saveLogs(a){ localStorage.setItem(LS_LOGS, JSON.stringify(a||[])); }
+
+  function loadGame(){
+    try{ return Object.assign({coins:0, hearts:5, xp:0, level:1, streak:0, lastLogin:null, nextFreeSpinAt:0}, JSON.parse(localStorage.getItem(LS_GAME)||'{}')); }
+    catch(e){ return {coins:0, hearts:5, xp:0, level:1, streak:0, lastLogin:null, nextFreeSpinAt:0}; }
+  }
+  function saveGame(g){ localStorage.setItem(LS_GAME, JSON.stringify(g||{})); }
+  function loadQuests(){
+    try{ const q=JSON.parse(localStorage.getItem(LS_QUESTS)||'{}'); const today=localISO(); if(q.date!==today) return {date:today, completed:[]}; return q; }
+    catch(e){ return {date:localISO(), completed:[]}; }
+  }
+  function saveQuests(q){ localStorage.setItem(LS_QUESTS, JSON.stringify(q||{})); }
+
+  let game = loadGame();
+  let dailyQuests = loadQuests();
+  const QUEST_DEFS=[
+    {id:'log', text:'Log an activity'},
+    {id:'schedule', text:'Open Training Schedule'},
+    {id:'spin', text:'Use daily spin'}
+  ];
+
+  function addCoins(n){ game.coins += n; saveGame(game); renderGameStatus(); }
+  function addHearts(n){ game.hearts = Math.max(0, game.hearts + n); saveGame(game); renderGameStatus(); }
+  function addXP(n){
+    game.xp += n;
+    while(game.xp >= game.level*100){ game.xp -= game.level*100; game.level++; }
+    saveGame(game); renderGameStatus();
+  }
+  function renderGameStatus(){
+    $('#coinsDisplay').textContent = game.coins;
+    $('#heartsDisplay').textContent = game.hearts;
+    $('#levelDisplay').textContent = `Lv ${game.level}`;
+  }
+  function renderQuests(){
+    const list=$('#questsList'); if(!list) return;
+    list.innerHTML='';
+    QUEST_DEFS.forEach(q=>{
+      const done=dailyQuests.completed.includes(q.id);
+      const li=document.createElement('li');
+      li.innerHTML=`<div class="flex items-center justify-between"><span>${q.text}</span><span class="${done?'text-green-600':'text-gray-400'}">${done?'✓':'—'}</span></div>`;
+      list.appendChild(li);
+    });
+  }
+  function recordQuest(id){
+    if(!dailyQuests.completed.includes(id)){
+      dailyQuests.completed.push(id);
+      saveQuests(dailyQuests);
+      addCoins(5); addXP(5);
+      renderQuests();
+    }
+  }
+
+  function handleDailyLogin(){
+    const today=localISO();
+    if(game.lastLogin!==today){
+      if(game.lastLogin && daysBetweenLocal(game.lastLogin, today)===1){ game.streak++; } else { game.streak=1; }
+      game.lastLogin=today;
+      saveGame(game);
+      dailyQuests={date:today, completed:[]}; saveQuests(dailyQuests);
+      addCoins(10); addXP(10);
+    }
+  }
+  function canSpin(){ return Date.now() >= (game.nextFreeSpinAt||0); }
+  function updateSpinInfo(){
+    const el=$('#spinInfo'); if(!el) return;
+    if(canSpin()){ el.textContent='Ready'; $('#spinBtn').disabled=false; }
+    else { const ms=game.nextFreeSpinAt-Date.now(); const h=Math.ceil(ms/3600000); el.textContent=`Come back in ${h}h`; $('#spinBtn').disabled=true; }
+  }
+  function spinWheel(){
+    if(!canSpin()) return;
+    const rewards=[
+      {type:'coins',amount:5,text:'+5 Coins'},
+      {type:'coins',amount:10,text:'+10 Coins'},
+      {type:'coins',amount:20,text:'+20 Coins'},
+      {type:'hearts',amount:1,text:'+1 Heart'}
+    ];
+    const r=rewards[Math.floor(Math.random()*rewards.length)];
+    if(r.type==='coins') addCoins(r.amount);
+    if(r.type==='hearts') addHearts(r.amount);
+    alert(`You won ${r.text}`);
+    game.nextFreeSpinAt=Date.now()+24*3600*1000; saveGame(game); updateSpinInfo();
+    recordQuest('spin');
+  }
 
   /* ===== Badge ===== */
   function updateGoalBadge(goalType){ const map = {lose:'Lose', maintain:'Maintain', gain:'Gain'}; const el = $('#goalBadge'); el.textContent = map[goalType] || 'Goal'; el.classList.remove('hidden'); }
@@ -816,6 +918,7 @@
     const logs=getLogs(); logs.push({id:Date.now(), date:d, type:t, amount:a, kcal});
     saveLogs(logs); $('#logAmount').value='';
     renderLog(); updateProgressBar(); renderDailyTargetPanel();
+    addCoins(1); addXP(1); recordQuest('log');
   });
   document.getElementById('btnClearLog').addEventListener('click', ()=>{
     if(confirm('Clear all log entries?')){ saveLogs([]); renderLog(); updateProgressBar(); renderDailyTargetPanel(); }
@@ -997,12 +1100,16 @@
         .forEach((c,i)=>setTimeout(()=>c.classList.add('show'),i*100)),50);
     }
     if(id==='tabLog'){ renderLog(); }
-    if(id==='tabSchedule'){ renderSchedule(); }
+    if(id==='tabSchedule'){ renderSchedule(); recordQuest('schedule'); }
   }
   document.querySelectorAll('.tab-button').forEach(b=>b.addEventListener('click',()=>switchTab(b.id)));
 
   /* ===== Init ===== */
   window.onload = ()=>{
+    handleDailyLogin();
+    renderGameStatus();
+    renderQuests();
+    updateSpinInfo();
     if(!hasProfile()){
       showOnboarding();
     } else {
